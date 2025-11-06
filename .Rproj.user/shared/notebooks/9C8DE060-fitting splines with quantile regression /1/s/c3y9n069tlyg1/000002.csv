@@ -1,0 +1,7 @@
+"0","```r
+n <- 1e3
+x <- seq(0, 2*pi, length.out =n)
+y <- cos(x) +rnorm(n,0,0.5)
+data <- data.frame (x=x, y=y)
+plot(x,y)
+```"

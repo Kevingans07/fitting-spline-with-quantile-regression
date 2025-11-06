@@ -1,0 +1,77 @@
+---
+title: "Combining Splines with Quantile regression"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+n <- 1e3
+x <- seq(0, 2*pi, length.out =n)
+y <- cos(x) +rnorm(n,0,0.5)
+data <- data.frame (x=x, y=y)
+plot(x,y)
+```
+
+want to build spline model matrix X
+
+```{r}
+library(mgcv)
+
+#1. Build spline model with smoothCon
+spline_model <- smoothCon(s(x,k=10,bs="cr"), data=data, knots=NULL)[[1]]
+X <- spline_model$X
+S <- spline_model$S[[1]] # penalty matrix S
+
+#2. Define loss function with psi, lambda, sigma
+pen_ssqr <- function(beta, X, y, S, 
+                     lambda,tau, psi =0.1, sigma =1){
+  mu <- X %*% beta
+  res <- (y-mu)
+  pen <- as.numeric(t(beta) %*% S %*% beta) #produces a 1x1 matrix
+  
+  #loss <- sum((y - mu)^2) + lambda * pen # this is for least square
+  
+  #smoothed pinball loss For Quantile Regression
+  pinball_loss <- - sum((tau -plogis(res/psi))* res) 
+  penalty <- lambda * pen
+  return(pinball_loss+penalty)
+}
+
+
+```
+
+```{r}
+fit <- lm(y ~ X-1, data = data)
+matplot(X, x=x, type ='l', ylab = "Spline Basis Function")
+coef(fit)
+plot (x,y, col="grey")
+lines(x, X %*% coef(fit), type = 'l', col = "red", lwd = 2)
+```
+
+```{r}
+#3. Optimise
+#assume sigma =1
+#       psi is small number
+#develop code to estimate beta
+
+#FIXED PARAMETERS
+tau <- 0.5 #quantile level
+lambda <- 100
+psi <- 0.1
+sigma <- 1 #fixed
+
+fit_pen <- optim(par = fit$coef, 
+                 fn = pen_ssqr, 
+                 y = y, X = X, 
+                 tau = tau, S = S, 
+                lambda = lambda, method = "BFGS",
+                )
+
+
+#visualisation
+plot(x, y, col = "grey")
+lines(x,X %*% coef(fit), type = 'l', col = "blue", lwd = 2)
+lines(x, X %*% fit_pen$par, type = 'l', col = "red", lwd = 2)
+
+```
