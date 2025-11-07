@@ -1,4 +1,0 @@
-"0","```r
-fit <- lm(y ~ X-1, data = data)
-matplot(X, x=x, type ='l', ylab = \"Spline Basis Function\")
-```"
