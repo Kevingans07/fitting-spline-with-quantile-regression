@@ -33,7 +33,7 @@ pen_ssqr <- function(beta, X, y, S,
   #loss <- sum((y - mu)^2) + lambda * pen # this is for least square
   
   #smoothed pinball loss For Quantile Regression
-  pinball_loss <- - sum((tau -plogis(res/psi))* res) 
+  pinball_loss <- sum((tau -(res<0))* res) 
   penalty <- lambda * pen
   return(pinball_loss+penalty)
 }
@@ -44,7 +44,7 @@ pen_ssqr <- function(beta, X, y, S,
 ```{r}
 fit <- lm(y ~ X-1, data = data)
 matplot(X, x=x, type ='l', ylab = "Spline Basis Function")
-coef(fit)
+coef(fit) 
 plot (x,y, col="grey")
 lines(x, X %*% coef(fit), type = 'l', col = "red", lwd = 2)
 ```
@@ -56,7 +56,7 @@ lines(x, X %*% coef(fit), type = 'l', col = "red", lwd = 2)
 #develop code to estimate beta
 
 #FIXED PARAMETERS
-tau <- 0.5 #quantile level
+tau <- 0.9 #quantile level -> 90th percentile
 lambda <- 100
 psi <- 0.1
 sigma <- 1 #fixed
@@ -71,7 +71,7 @@ fit_pen <- optim(par = fit$coef,
 
 #visualisation
 plot(x, y, col = "grey")
-lines(x,X %*% coef(fit), type = 'l', col = "blue", lwd = 2)
+lines(x,X %*% coef(fit), type = 'l', col = "blue", lwd = 2) # this is median
 lines(x, X %*% fit_pen$par, type = 'l', col = "red", lwd = 2)
 
 ```
