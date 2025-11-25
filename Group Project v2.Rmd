@@ -113,6 +113,11 @@ psi <- 0.1
 lambda_1 <- 100
 sigma <- 1
 
+#true function
+z_norm_90 <- qnorm(0.9)
+sigma_true <-0.5 # true mean
+sin_quantile_90 <- sin(x) +sigma_true * z_norm_90
+
 
 fit_pen_1 <- optim(par = coef(fit),
                 fn = pen_negllk,
@@ -128,10 +133,12 @@ fit_pen_2 <- optim(par = coef(fit),
                  )
 
 plot(x, y, col = "grey", main = paste("Quantile Regression tau =", tau))
+
 lines(x, X %*% fit_pen_1$par, col = "red", lwd = 2)
-lines(x, X %*% fit_pen_2$par, col = "purple", lwd = 2)
-lines(x, sin(x), col = "blue", lty = 2, lwd = 2) # True function
-legend("topright", legend = c("Data", "Fitted", "True"), 
+lines(x, X %*% fit_pen_2$par, col = "brown", lwd = 2)
+
+lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 5) # True 90th quantile
+legend("topright", legend = c("Data", "Fitted", "True 90th quantile"), 
        col = c("grey", "red", "blue"), lty = c(NA, 1, 2), pch = c(1, NA, NA))
 ```
 
@@ -145,7 +152,7 @@ taus <- 0.9          # quantile of interest
 psi <- 0.05          # smoothing param used during fit (small)
 sigma <- 1           # fixed
 #Define lambda
-lambda_grid <- 10^seq(-3, 10, length.out = 20)  # grid of lambdas to try (10^-2 to 10^5)
+lambda_grid <- 10^seq(-3, 25, length.out = 20)  # grid of lambdas to try (10^-3 to 10^25)
 set.seed(42)
 
 
@@ -237,16 +244,16 @@ if (length(start_full) != ncol(X)) start_full <- rep(0, ncol(X))
   plot(x, y, col = "grey")
   
   lines(dat$x, as.numeric(X %*% fit_final_with_best_lambda$par), col = "red", lwd = 2)
-  lines(dat$x, as.numeric(X %*% fit_pen_1$par), col = "blue", lwd = 2)
-  lines(x, sin(x), col = "green", lty = 2, lwd = 2) # True function
+  lines(dat$x, as.numeric(X %*% fit_pen_1$par), col = "brown", lwd = 2)
+  lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 5) # True function
   
   legend("topright",
        legend = c(
          paste("for tau =", tau," | Optimal λ=", round(best_lambda, 4)),
          paste("λ = ", lambda_1),
-         "True function = median"
+         "True function = 90th quantile"
        ),
-       col = c("red", "blue", "green"),
+       col = c("red", "brown", "blue"),
        lty = c(1, 1, 2),
        lwd = c(2, 2, 2))
   
