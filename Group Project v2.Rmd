@@ -85,7 +85,7 @@ negGrad <- function(par, tau, psi, dat, X)
 ```
 
 ```{r}
-# version one of penalty
+# version one of penalty -> this is smoothed
 pen_negllk <- function(par, tau, psi, dat, X, S, lambda) {
   negllkFun(par, tau, psi, dat, X) + as.numeric(lambda * t(par) %*% (S %*% par))
 }
@@ -95,15 +95,25 @@ pen_negGrad <- function(par, tau, psi, dat, X, S, lambda) {
 }
 
 # second version of penalty
-pen_ssqr <- function(beta, X, y, S, 
+pen_ssqr2 <- function(beta, X, y, S, 
                      lambda,tau, psi =0.1, sigma =1){
   mu <- X %*% beta
   res <- (y-mu)
   pen <- as.numeric(t(beta) %*% S %*% beta) #produces a 1x1 matrix
-  
-  loss <- sum((tau -(res<0))* res) 
   penalty <- lambda * pen
-  return(loss+penalty)
+  #loss <- sum((tau -(res<0))* res) 
+  loss <- negllkFun(beta, tau, psi, y, X)
+  
+  as.numeric(loss+penalty)
+}
+
+pen_ssqr2_grad <- function(beta, X, y, S, 
+                     lambda,tau, psi =0.1, sigma =1){
+  
+  grad_loss <- negGrad(beta, tau, psi, y, X)   # SAME GRADIENT
+  grad_pen  <- 2 * lambda * S %*% beta
+  grad_loss + grad_pen
+  
 }
 ```
 
@@ -126,141 +136,162 @@ fit_pen_1 <- optim(par = coef(fit),
                 method = "BFGS")
 
 fit_pen_2 <- optim(par = coef(fit),
-                 fn = pen_ssqr,
-                 y = y, X = X,
-                 tau = tau, S = S,
-                 lambda = lambda_1, method = "BFGS",
+                 fn = pen_ssqr2,
+                 gr = pen_ssqr2_grad,
+                 tau = tau, psi = psi, y = dat$y, X = X, S = S, lambda = lambda_1,
+                 method = "BFGS",
                  )
 
 plot(x, y, col = "grey", main = paste("Quantile Regression tau =", tau))
 
 lines(x, X %*% fit_pen_1$par, col = "red", lwd = 2)
-lines(x, X %*% fit_pen_2$par, col = "brown", lwd = 2)
-
+lines(x, X %*% fit_pen_2$par, col = "yellow", lwd = 2) #this overlaps with other line as it has same value
 lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 5) # True 90th quantile
-legend("topright", legend = c("Data", "Fitted", "True 90th quantile"), 
-       col = c("grey", "red", "blue"), lty = c(NA, 1, 2), pch = c(1, NA, NA))
+
+legend("topright", legend = c("Data", "Fitted 1","Fitted 2", "True 90th quantile"), 
+       col = c("grey", "red","yellow", "blue"), lty = c(NA, 1, 2), pch = c(1, NA, NA))
 ```
 
 ##Doing K-Fold Cross Validation to find optimal lambda that captures the model smoothly
 ```{r}
 # -> we want to find lambda that represents the data (not too small lambda that will overfit the data(model) nor too large that oversmooth the model )
 
-# --- PARAMETERS
-k_folds <- 5         # split the data into 5 equal folds (1 for validation, 2-5 for training)
-taus <- 0.9          # quantile of interest
-psi <- 0.05          # smoothing param used during fit (small)
-sigma <- 1           # fixed
-#Define lambda
-lambda_grid <- 10^seq(-3, 25, length.out = 20)  # grid of lambdas to try (10^-3 to 10^25)
+### --- PARAMETERS ---
+k_folds <- 5
+tau <- 0.9
+psi <- 0.05
+sigma <- 1
+lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
 set.seed(42)
 
 
-# --- K-Fold indices ---
 n <- nrow(dat)
-fold_indexs <- sample(rep(1:k_folds, length.out = n))
+fold_ids <- sample(rep(1:k_folds, length.out = n))
 
-# store CV results
-cv_results <- data.frame(lambda = lambda_grid, mean_val_loss = NA_real_)
+# store mean validation loss
+cv_results <- data.frame(lambda = lambda_grid,
+                         sum_vall_loss = NA_real_)
 
 # Precompute starting coefficients from full-data OLS (warm start)
-start_coef <- coef(fit)  # from lm(y ~ X - 1)
+start_coef <- coef(fit) #from lm(y ~ X - 1)
 
-# --- loop over lambda values in grid (K-Fold) ---
-for (i in seq_along(lambda_grid)){
-  lambda <- lambda_grid[i]
-  validation_losses <- numeric(k_folds)
+### --- K-FOLD LOOP over lambda values in grid ---
+for (i in seq_along(lambda_grid)) {
   
-  for (fold in 1:k_folds) {
-      train_index <- which(fold_indexs != fold)
-      validation_index   <- which(fold_indexs == fold)
-      
-      X_train <- X[train_index,          , drop = FALSE]
-      y_train <- dat$y[train_index]
+  lambda <- lambda_grid[i]
+  #fold_mean <- numeric(k_folds)
+  fold_sum <- numeric(k_folds)
 
-      X_val   <- X[validation_index,     , drop = FALSE]
-      y_val   <- dat$y[validation_index]
-      
+  for (fold in 1:k_folds) {
+
+    # split
+    train_idx <- which(fold_ids != fold)
+    val_idx   <- which(fold_ids == fold)
+
+    X_train <- X[train_idx, , drop = FALSE]
+    y_train <- dat$y[train_idx]
+
+    X_val   <- X[val_idx, , drop = FALSE]
+    y_val   <- dat$y[val_idx]
     
-      
-      #OLS on training fold
-      ols_train <- lm(y_train ~ X_train -1)
-      start_beta <- coef(ols_train)
-      if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
-      
-      
-      # FIT on training fold (with penalty lambda)
-      fit_fold <- optim(
-                      par = start_beta,
-                      fn = pen_ssqr,
+    #OLS on training fold
+    ols_train <- lm(y_train ~ X_train -1)
+    start_beta <- coef(ols_train)
+    if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
+    
+  
+
+    # FIT on training (always same warm start for stability)
+    fit_fold <- optim(par = start_beta,
+                      fn = pen_ssqr2,
+                      gr = pen_ssqr2_grad,
                       X = X_train,
                       y = y_train,
-                      S = S,
-                      lambda = lambda,
-                      tau = tau,
-                      method = "BFGS",
-                      control = list(maxit = 1000, reltol = 1e-6)
-                    )
-      
-      beta_hat <- fit_fold$par
-      
-    # Validation: compute mean pinball loss per observation (NO penalty)
-    resid_val <- as.numeric (y_val - X_val %*% beta_hat)    # y - mu
-    pinball_vec <- (tau - (resid_val < 0)) * resid_val
-    validation_losses[fold] <- mean(pinball_vec)   # mean per-observation
-  
+                      tau = tau, psi = psi,
+                      S = S, lambda = lambda,
+                      method = "BFGS")
+
+    beta_hat <- fit_fold$par
+
+    # VALIDATION PINBALL LOSS (NO PENALTY)
+    resid_val <- as.numeric(y_val - X_val %*% beta_hat)
+    pinball <- (tau - (resid_val < 0)) * resid_val
+
+    #fold_mean[fold] <- mean(pinball)
+    fold_sum[fold] <- sum(pinball) ## THIS WILL CALCULATE SUM CV LOSS, NOT MEAN CV LOSS
   }
-      
-      # store mean validation loss (lower is better) (normalized per-observation)
-      cv_results$mean_val_loss[i] <- mean(validation_losses)/ length(validation_index) 
+
+  #cv_results$mean_val_loss[i] <- mean(fold_mean)
+  cv_results$sum_val_loss[i] <- sum(fold_sum)
 }
-  
-  #choosing best lambda (minimal mean validation)
-  best_row <- cv_results[which.min(cv_results$mean_val_loss),  ]
-  best_lambda <- best_row$lambda
-  print(paste("Best Lambda is: ", best_lambda))
-  paste("CV loss at optimal lambda is", round(best_row, 6))
-  
-  #The optimal lambda is when the CV loss is the minimum
-  
-  
+
+### --- CHOOSE BEST LAMBDA from sum cv loss---
+
+#best_lambda_mean <- cv_results$lambda[which.min(cv_results$mean_val_loss)]
+best_lambda_sum <- cv_results[which.min(cv_results$sum_val_loss), ]
+best_lambda <- best_lambda_sum$lambda
+
+#print(paste("Best λ (mean CV loss):", best_lambda_mean))
+print(paste("Best λ (sum CV loss):",  best_lambda))
+#paste("CV loss at optimal lambda is", round(best_lambda_sum, 6)) 
+#optimal lambda when sum is minimal
+
   
 # Refit final model on FULL DATA with best lambda
 # Warm start: OLS on full data
 ols_full <- lm(dat$y ~ X - 1)
 start_full <- coef(ols_full)
 if (length(start_full) != ncol(X)) start_full <- rep(0, ncol(X))
-  
- # Fit final model
-  fit_final_with_best_lambda <- optim(par = start_full,
-                            fn = pen_ssqr,
-                            y = dat$y,
-                            X = X,
-                            tau = tau,
-                            S = S,
-                            lambda = best_lambda,
-                            method = "BFGS")
-  
-  plot(x, y, col = "grey")
-  
-  lines(dat$x, as.numeric(X %*% fit_final_with_best_lambda$par), col = "red", lwd = 2)
-  lines(dat$x, as.numeric(X %*% fit_pen_1$par), col = "brown", lwd = 2)
-  lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 5) # True function
-  
-  legend("topright",
-       legend = c(
-         paste("for tau =", tau," | Optimal λ=", round(best_lambda, 4)),
-         paste("λ = ", lambda_1),
-         "True function = 90th quantile"
-       ),
-       col = c("red", "brown", "blue"),
-       lty = c(1, 1, 2),
-       lwd = c(2, 2, 2))
-  
+
+### --- PLOT CV CURVE ---
+plot(log10(cv_results$lambda), cv_results$sum_val_loss,
+     type = "b", pch = 19, col = "darkblue",
+     xlab = "log10(lambda)",
+     ylab = "SUM CV Loss",
+     main = paste("CV for tau =", tau))
+
+abline(v = log10(best_lambda_sum),  col="purple", lty=2)
+
+
+### --- FIT FINAL MODEL USING BEST LAMBDA ---
+fit_best <- optim(par = start_full,
+                   fn = pen_ssqr2,
+                   gr = pen_ssqr2_grad,
+                   X = X, y = dat$y,
+                   tau = tau, psi = psi,
+                   S = S, lambda = best_lambda,
+                   method = "BFGS")
+
+plot(dat$x, dat$y, col = "grey", main = paste("Quantile GAM (tau =", tau,")"))
+
+
+### ALSO FIT λ=100 FOR COMPARISON
+fit_100 <- optim(par = start_full,
+                 fn = pen_ssqr2,
+                 gr = pen_ssqr2_grad,
+                 X = X, y = dat$y,
+                 tau = tau, psi = psi,
+                 S = S, lambda = 100,
+                 method = "BFGS")
+
+### --- PLOT RESULTS ---
+
+lines(dat$x, X %*% fit_best$par, col = "red", lwd = 3)
+lines(dat$x, X %*% fit_100$par, col = "purple", lwd = 3)
+lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 3) #true function
+
+legend("topright", 
+       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+                   "λ = 100",
+                   "True (90th quantile)" ), 
+       col = c("red", "purple", "blue"),
+       lty = c(1, 1, 2), lwd = 3
+       )
+
 
 ```
 
-```{r}
-# testing our code
 
-```
+
+
+
