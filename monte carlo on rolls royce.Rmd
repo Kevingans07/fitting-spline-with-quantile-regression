@@ -1,0 +1,327 @@
+---
+title: "Monte Carlo on Rolls Royce"
+output: html_document
+date: "2025-11-11"
+---
+
+
+```{r}
+install.packages(c("quantmod", "ggplot2", "dplyr"))
+library(quantmod)
+library(ggplot2)
+library(dplyr)
+```
+
+## Rolls Royce stock
+
+```{r}
+# Get Rolls-Royce Holdings data from Yahoo Finance
+getSymbols("RR.L", from = "2018-01-01", to = Sys.Date(), src = "yahoo")
+#na.omit to remove na values
+
+#this to check how many missing values there are in RR
+# sum(is.na(RR.L))
+# colSums(is.na(RR.L))
+
+RR.L_clean <- RR.L[complete.cases(RR.L), ]
+#sum(is.na(RR.L_clean))
+
+#using log returns
+ret <- diff(log(Cl(RR.L_clean))) #closed log price of Rolls Royce
+ret <- na.omit(ret)              # Y = log(RR.L.close(t))-log(RR.L.close(t-1))
+#17534 is the number of days after 1st jan 1970
+
+dat <- data.frame(
+  t = as.numeric(index(ret)),   # time as numeric covariate
+  y = as.numeric(ret)
+)
+
+n<- nrow(dat)
+
+# View the first few rows
+head(RR.L_clean)
+chartSeries(RR.L, name = "Rolls-Royce Holdings (RR.L)", theme = chartTheme("white"))
+
+
+
+```
+
+```{r}
+#This is for Quantile GAMs
+library(mgcv)
+sm <- smoothCon(
+  s(t, k = 15, bs = "cr"),
+  data = dat
+)[[1]]
+
+X <- sm$X
+S <- sm$S[[1]]
+
+
+#actual (empirical) tau. want to check at tau =0.9
+tau <- 0.9
+actual_q90 <- quantile(dat$y, probs = tau)
+actual_q90
+
+```
+
+```{r}
+
+dlf <- function(x, tau, mu, psi, log = FALSE, deriv = 0)
+{
+  sig <- 1
+  y <- (x - mu) / sig
+  out <- (1-tau) * y - psi * log(1 + exp(y / psi)) - log(sig * psi * beta(psi * (1 - tau), tau * psi))
+  if (!log) out <- exp(out)
+  if(deriv > 0)
+  {
+    out <- list("d" = out)
+    dl <- dlogis(x, mu, psi*sig)
+    pl <- plogis(x, mu, psi*sig)
+    out$D <- sum((pl - (1-tau)) / sig)
+    if(deriv > 1)
+    {
+      out$D2 <- sum(-dl / sig)
+    }
+  }
+  return(out)
+}
+
+negllkFun <- function(par, tau, psi, dat, X)
+{
+  mu <- X %*% par
+  out <- - sum( dlf(x = dat, tau = tau, mu = mu, psi = psi, log = TRUE))
+  return(out)
+}
+
+# Computes derivative of the log-likelihood w.r.t. beta
+negGrad <- function(par, tau, psi, dat, X)
+{
+  mu <- X %*% par
+  tmp <- lapply(1:length(mu),
+                function(ii){
+                  a <- - dlf(x = dat[ii], tau = tau, mu = mu[ii],
+                  psi = psi, log = TRUE, deriv = 1)$D
+                  return(a[1] * X[ii, ])
+                }
+  )
+  out <- Reduce("+", tmp)
+  return(out)
+}
+
+pen_ssqr2 <- function(beta, X, y, S, 
+                     lambda,tau, psi =0.1, sigma =1){
+  mu <- X %*% beta
+  res <- (y-mu)
+  pen <- as.numeric(t(beta) %*% S %*% beta) #produces a 1x1 matrix
+  penalty <- lambda * pen
+  #loss <- sum((tau -(res<0))* res) 
+  loss <- negllkFun(beta, tau, psi, y, X)
+  
+  as.numeric(loss+penalty)
+}
+
+pen_ssqr2_grad <- function(beta, X, y, S, 
+                     lambda,tau, psi =0.1, sigma =1){
+  
+  grad_loss <- negGrad(beta, tau, psi, y, X)   # SAME GRADIENT
+  grad_pen  <- 2 * lambda * S %*% beta
+  grad_loss + grad_pen
+  
+}
+```
+
+```{r} 
+#Doing K fold
+### --- PARAMETERS ---
+k_folds <- 5
+tau <- 0.9
+psi <- 0.05
+sigma <- 1
+lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
+set.seed(42)
+
+n <- nrow(dat)
+fold_ids <- sample(rep(1:k_folds, length.out = n))
+
+# store mean validation loss
+cv_results <- data.frame(lambda = lambda_grid,
+                         sum_vall_loss = NA_real_)
+
+# Precompute starting coefficients from full-data OLS (warm start)
+start_coef <- coef(lm(dat$y ~ X - 1)) 
+
+### --- K-FOLD LOOP over lambda values in grid ---
+for (i in seq_along(lambda_grid)) {
+  
+  lambda <- lambda_grid[i]
+  fold_sum <- numeric(k_folds)
+
+  for (fold in 1:k_folds) {
+
+    # split
+    train_idx <- which(fold_ids != fold)
+    val_idx   <- which(fold_ids == fold)
+
+    X_train <- X[train_idx, , drop = FALSE]
+    y_train <- dat$y[train_idx]
+
+    X_val   <- X[val_idx, , drop = FALSE]
+    y_val   <- dat$y[val_idx]
+    
+    #OLS on training fold
+    ols_train <- lm(y_train ~ X_train -1)
+    start_beta <- coef(ols_train)
+    if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
+    
+  
+
+    # FIT on training (always same warm start for stability)
+    fit_fold <- optim(par = start_beta,
+                      fn = pen_ssqr2,
+                      gr = pen_ssqr2_grad,
+                      X = X_train,
+                      y = y_train,
+                      tau = tau, psi = psi,
+                      S = S, lambda = lambda,
+                      method = "BFGS")
+
+    beta_hat <- fit_fold$par
+
+    # VALIDATION PINBALL LOSS (NO PENALTY)
+    resid_val <- as.numeric(y_val - X_val %*% beta_hat)
+    pinball <- (tau - (resid_val < 0)) * resid_val
+
+    #fold_mean[fold] <- mean(pinball)
+    fold_sum[fold] <- sum(pinball) ## THIS WILL CALCULATE SUM CV LOSS, NOT MEAN CV LOSS
+  }
+
+  #cv_results$mean_val_loss[i] <- mean(fold_mean)
+  cv_results$sum_val_loss[i] <- sum(fold_sum)
+}
+
+### --- CHOOSE BEST LAMBDA from sum cv loss---
+
+#best_lambda_mean <- cv_results$lambda[which.min(cv_results$mean_val_loss)]
+best_lambda_sum <- cv_results[which.min(cv_results$sum_val_loss), ]
+best_lambda <- best_lambda_sum$lambda
+
+#print(paste("Best lambda (mean CV loss):", best_lambda_mean))
+print(paste("Best lambda (sum CV loss):",  best_lambda))
+#paste("CV loss at optimal lambda is", round(best_lambda_sum, 6)) 
+#optimal lambda when sum is minimal
+```
+```{r}
+#visualising
+plot(log10(cv_results$lambda), cv_results$sum_val_loss,
+     type = "b", pch = 19,
+     xlab = "log10(lambda)",
+     ylab = "Sum CV Pinball Loss",
+     main = "CV loss for RR.L (tau = 0.9)")
+
+abline(v = log10(best_lambda), col = "red", lwd = 2, lty = 2)
+```
+
+```{r}
+
+start_full <- coef(lm(dat$y ~ X - 1))
+
+fit_best <- optim(
+  par = start_full,
+  fn  = pen_ssqr2,
+  gr  = pen_ssqr2_grad,
+  X   = X,
+  y   = dat$y,
+  tau = tau,
+  S   = S,
+  lambda = best_lambda,
+  method = "BFGS"
+)
+
+q90_pred <- as.numeric(X %*% fit_best$par)
+```
+
+```{r}
+plot(dat$t, dat$y, col = "grey",
+     main = "RR.L Quantile GAM (tau = 0.9)",
+     ylab = "Log returns", xlab = "Time")
+
+lines(dat$t, q90_pred, col = "red", lwd = 2)
+abline(h = actual_q90, col = "blue", lwd = 2, lty = 2)
+
+legend("topright",
+       legend = c("Predicted 90% quantile", "Empirical 90% quantile"),
+       col = c("red", "blue"),
+       lty = c(1, 2),
+       lwd = 2)
+
+
+```
+
+```{r}
+# Calculate daily log returns
+returns <- dailyReturn(Ad(RR.L), type = "log")
+
+# Summary stats
+mean_return <- mean(returns, na.rm = TRUE)
+sd_return <- sd(returns, na.rm = TRUE)
+
+cat("Mean daily return:", mean_return, "\n")
+cat("Standard deviation:", sd_return, "\n")
+
+```
+
+##Simulate 10.000 possible future price paths over 1 year (252 trading days)
+```{r}
+# Simulation parameters
+S0 <- as.numeric(last(Ad(RR.L)))  # current stock price
+T <- 252                          # number of trading days (1 year)
+n_sim <- 10000                    # number of simulations
+
+# Empty matrix for simulated paths
+sim_matrix <- matrix(0, nrow = T, ncol = n_sim)
+
+# Generate simulated paths
+set.seed(123)
+for (i in 1:n_sim) {
+  daily_shocks <- rnorm(T, mean = mean_return, sd = sd_return)
+  sim_matrix[, i] <- S0 * exp(cumsum(daily_shocks))
+}
+
+```
+
+```{r}
+# Get the ending prices for each simulation
+ending_prices <- sim_matrix[T, ]
+
+# Plot histogram of ending prices
+ggplot(data.frame(ending_prices), aes(x = ending_prices)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Monte Carlo Simulation: Rolls-Royce (RR.L) 1-Year Price Distribution",
+       x = "Simulated Price (GBP)", y = "Frequency") +
+  theme_minimal()
+
+# Key stats
+mean_price <- mean(ending_prices)
+median_price <- median(ending_prices)
+quantiles <- quantile(ending_prices, probs = c(0.05, 0.5, 0.95))
+
+cat("Expected average price after 1 year:", round(mean_price, 2), "\n")
+cat("Median price:", round(median_price, 2), "\n")
+cat("5% worst-case:", round(quantiles[1], 2), "\n")
+cat("95% best-case:", round(quantiles[3], 2), "\n")
+
+```
+
+```{r}
+# Plot 50 random simulated paths
+sample_paths <- sim_matrix[, sample(1:n_sim, 50)]
+
+matplot(sample_paths, type = "l", lty = 1, col = rgb(0, 0, 1, 0.1),
+        main = "Simulated Rolls-Royce Stock Price Paths (1 Year)",
+        xlab = "Days", ylab = "Price (GBP)")
+lines(1:T, apply(sim_matrix, 1, mean), col = "red", lwd = 2)
+legend("topleft", legend = c("Simulated Paths", "Mean Path"),
+       col = c("blue", "red"), lty = 1, bty = "n")
+
+```

@@ -250,7 +250,7 @@ plot(log10(cv_results$lambda), cv_results$sum_val_loss,
      ylab = "SUM CV Loss",
      main = paste("CV for tau =", tau))
 
-abline(v = log10(best_lambda_sum),  col="purple", lty=2)
+abline(v = log10(best_lambda),  col="purple", lty=2)
 
 
 ### --- FIT FINAL MODEL USING BEST LAMBDA ---
@@ -290,7 +290,44 @@ legend("topright",
 
 
 ```
+```{r}
 
+### --- FIT FINAL MODEL USING BEST LAMBDA ---
+fit_best <- optim(par = start_full,
+                   fn = pen_ssqr2,
+                   gr = pen_ssqr2_grad,
+                   X = X, y = dat$y,
+                   tau = 0.5, psi = psi,
+                   S = S, lambda = best_lambda,
+                   method = "BFGS")
+
+plot(dat$x, dat$y, col = "grey", main = paste("Quantile GAM (tau =", tau,")"))
+
+
+### ALSO FIT λ=100 FOR COMPARISON
+fit_100 <- optim(par = start_full,
+                 fn = pen_ssqr2,
+                 gr = pen_ssqr2_grad,
+                 X = X, y = dat$y,
+                 tau = tau, psi = psi,
+                 S = S, lambda = 100,
+                 method = "BFGS")
+
+### --- PLOT RESULTS ---
+
+lines(dat$x, X %*% fit_best$par, col = "red", lwd = 3)
+lines(dat$x, X %*% fit_100$par, col = "purple", lwd = 3)
+lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 3) #true function
+
+legend("topright", 
+       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+                   "λ = 100",
+                   "True (90th quantile)" ), 
+       col = c("red", "purple", "blue"),
+       lty = c(1, 1, 2), lwd = 3
+       )
+
+```
 
 
 
