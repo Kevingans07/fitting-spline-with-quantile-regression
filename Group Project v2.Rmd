@@ -297,7 +297,7 @@ fit_best <- optim(par = start_full,
                    fn = pen_ssqr2,
                    gr = pen_ssqr2_grad,
                    X = X, y = dat$y,
-                   tau = 0.5, psi = psi,
+                   tau = 0.9, psi = psi,
                    S = S, lambda = best_lambda,
                    method = "BFGS")
 
@@ -329,6 +329,447 @@ legend("topright",
 
 ```
 
+```{r}
+
+n <- 1e3
+x <- seq(0, 2*pi, length.out = n)
+y_cos <- cos(x) + rnorm(n, 0, 0.5)
+dat_cos <- data.frame(x = x, y = y_cos)
+plot(x, y_cos)
+```
+```{r}
+sm <- smoothCon(s(x, k = 10, bs = "cr"), data=dat_cos, knots=NULL)[[1]]
+X <- sm$X
+S <- sm$S[[1]] # penalty matrix S
+
+fit_cos <- lm(y ~ X-1, data = dat_cos)
+
+matplot(X, x = x, type = 'l', ylab = "Spline basis function")
+```
+
+```{r}
+tau <- 0.9 #90th quantile
+psi <- 0.1
+lambda_1 <- 100
+sigma <- 1
+
+#true function
+z_norm_90 <- qnorm(tau)
+sigma_true <-0.5 # true mean
+cos_quantile_90 <- cos(x) +sigma_true * z_norm_90
+
+fit_pen_2 <- optim(par = coef(fit),
+                 fn = pen_ssqr2,
+                 gr = pen_ssqr2_grad,
+                 tau = tau, psi = psi, y = dat_cos$y, X = X, S = S, lambda = lambda_1,
+                 method = "BFGS",
+                 )
+
+plot(x, y_cos, col = "grey", main = paste("Quantile Regression tau =", tau))
+
+
+lines(x, X %*% fit_pen_2$par, col = "yellow", lwd = 2) 
+lines(x, cos_quantile_90, col = "blue", lty = 2, lwd = 5) # True 90th quantile
+
+legend("topright", legend = c("Data", "Fitted 2", "True 90th quantile"), 
+       col = c("grey","yellow", "blue"), lty = c(NA, 1, 2), pch = c(1, NA, NA))
+```
+```{r}
+### --- PARAMETERS ---
+k_folds <- 5
+tau <- 0.9
+psi <- 0.05
+sigma <- 1
+lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
+set.seed(42)
+
+
+n <- nrow(dat_cos)
+fold_ids <- sample(rep(1:k_folds, length.out = n))
+
+# store mean validation loss
+cv_results <- data.frame(lambda = lambda_grid,
+                         sum_vall_loss = NA_real_)
+
+# Precompute starting coefficients from full-data OLS (warm start)
+start_coef <- coef(fit) #from lm(y ~ X - 1)
+
+### --- K-FOLD LOOP over lambda values in grid ---
+for (i in seq_along(lambda_grid)) {
+  
+  lambda <- lambda_grid[i]
+  #fold_mean <- numeric(k_folds)
+  fold_sum <- numeric(k_folds)
+
+  for (fold in 1:k_folds) {
+
+    # split
+    train_idx <- which(fold_ids != fold)
+    val_idx   <- which(fold_ids == fold)
+
+    X_train <- X[train_idx, , drop = FALSE]
+    y_train <- dat_cos$y[train_idx]
+
+    X_val   <- X[val_idx, , drop = FALSE]
+    y_val   <- dat_cos$y[val_idx]
+    
+    #OLS on training fold
+    ols_train <- lm(y_train ~ X_train -1)
+    start_beta <- coef(ols_train)
+    if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
+    
+  
+
+    # FIT on training (always same warm start for stability)
+    fit_fold <- optim(par = start_beta,
+                      fn = pen_ssqr2,
+                      gr = pen_ssqr2_grad,
+                      X = X_train,
+                      y = y_train,
+                      tau = tau, psi = psi,
+                      S = S, lambda = lambda,
+                      method = "BFGS")
+
+    beta_hat <- fit_fold$par
+
+    # VALIDATION PINBALL LOSS (NO PENALTY)
+    resid_val <- as.numeric(y_val - X_val %*% beta_hat)
+    pinball <- (tau - (resid_val < 0)) * resid_val
+
+    #fold_mean[fold] <- mean(pinball)
+    fold_sum[fold] <- sum(pinball) ## THIS WILL CALCULATE SUM CV LOSS, NOT MEAN CV LOSS
+  }
+
+  #cv_results$mean_val_loss[i] <- mean(fold_mean)
+  cv_results$sum_val_loss[i] <- sum(fold_sum)
+}
+
+### --- CHOOSE BEST LAMBDA from sum cv loss---
+
+best_lambda_sum <- cv_results[which.min(cv_results$sum_val_loss), ]
+best_lambda <- best_lambda_sum$lambda
+
+#print(paste("Best λ (mean CV loss):", best_lambda_mean))
+print(paste("Best λ (sum CV loss):",  best_lambda))
+#paste("CV loss at optimal lambda is", round(best_lambda_sum, 6)) 
+#optimal lambda when sum is minimal
+
+  
+# Refit final model on FULL DATA with best lambda
+# Warm start: OLS on full data
+ols_full <- lm(dat$y ~ X - 1)
+start_full <- coef(ols_full)
+if (length(start_full) != ncol(X)) start_full <- rep(0, ncol(X))
+
+### --- PLOT CV CURVE ---
+plot(log10(cv_results$lambda), cv_results$sum_val_loss,
+     type = "b", pch = 19, col = "darkblue",
+     xlab = "log10(lambda)",
+     ylab = "SUM CV Loss",
+     main = paste("CV for tau =", tau))
+
+abline(v = log10(best_lambda),  col="purple", lty=2)
+
+
+### --- FIT FINAL MODEL USING BEST LAMBDA ---
+fit_best <- optim(par = start_full,
+                   fn = pen_ssqr2,
+                   gr = pen_ssqr2_grad,
+                   X = X, y = dat_cos$y,
+                   tau = tau, psi = psi,
+                   S = S, lambda = best_lambda,
+                   method = "BFGS")
+
+plot(dat_cos$x, dat_cos$y, col = "grey", main = paste("Quantile GAM (tau =", tau,")"))
+
+lines(dat_cos$x, X %*% fit_best$par, col = "red", lwd = 3)
+lines(x, cos_quantile_90, col = "blue", lty = 2, lwd = 3) #true function
+
+legend("topright", 
+       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+                   
+                   "True (90th quantile)" ), 
+       col = c("red", "blue"),
+       lty = c(1, 1, 2), lwd = 3
+       )
+
+```
+
+
+##This is for Gamma Distribution
+
+```{r}
+mu_sin <- exp( sin(x) )
+mu_cos <- exp( cos(x) )
+
+shape <- 5   # controls variance
+scale_sin <- mu_sin / shape
+scale_cos <- mu_cos / shape
+
+y_sin_gamma <- rgamma(n, shape = shape, scale = scale_sin)
+y_cos_gamma <- rgamma(n, shape = shape, scale = scale_cos)
+
+true_q90_sin <- qgamma(0.9, shape = shape, scale = scale_sin)
+true_q90_cos <- qgamma(0.9, shape = shape, scale = scale_cos)
+
+dat_sin_gamma <- data.frame(x = x, y = y_sin_gamma)
+dat_cos_gamma <- data.frame(x = x, y = y_cos_gamma)
+
+plot(x,y_sin_gamma)
+plot(x,y_cos_gamma)
+
+#Gamma is right skewed, so psi (for smoothness) has to be small as it is more sensitive
+
+
+```
+
+```{r}
+sm <- smoothCon(s(x, k = 20, bs = "cr"), data = dat_sin_gamma)[[1]]
+sm <- smoothCon(s(x, k = 20, bs = "cr"), data = dat_cos_gamma)[[1]]
+X <- sm$X
+S <- sm$S[[1]]
+
+fit_gamma_sin <- lm(y ~ X-1, data = dat_sin_gamma)
+fit_gamma_cos <- lm(y ~ X-1, data = dat_cos_gamma)
 
 
 
+### --- PARAMETERS ---
+k_folds <- 5
+tau <- 0.9
+psi <- 0.01 #small smoothness for sensitive gamma dist
+#sigma <- 1 #dont need this for gamma
+lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
+set.seed(42)
+
+
+n <- nrow(dat_sin_gamma)
+fold_ids <- sample(rep(1:k_folds, length.out = n))
+
+# store mean validation loss
+cv_results <- data.frame(lambda = lambda_grid,
+                         sum_vall_loss = NA_real_)
+
+# Precompute starting coefficients from full-data OLS (warm start)
+#start_coef <- coef(fit) #from lm(y ~ X - 1)
+
+### --- K-FOLD LOOP over lambda values in grid ---
+for (i in seq_along(lambda_grid)) {
+  
+  lambda <- lambda_grid[i]
+  #fold_mean <- numeric(k_folds)
+  fold_sum <- numeric(k_folds)
+
+  for (fold in 1:k_folds) {
+
+    # split
+    train_idx <- which(fold_ids != fold)
+    val_idx   <- which(fold_ids == fold)
+
+    X_train <- X[train_idx, , drop = FALSE]
+    y_train <- dat_sin_gamma$y[train_idx]
+
+    X_val   <- X[val_idx, , drop = FALSE]
+    y_val   <- dat_sin_gamma$y[val_idx]
+    
+    #OLS on training fold
+    ols_train <- lm(y_train ~ X_train -1)
+    start_beta <- coef(ols_train)
+    if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
+    
+  
+
+    # FIT on training (always same warm start for stability)
+    fit_fold <- optim(par = start_beta,
+                      fn = pen_ssqr2,
+                      gr = pen_ssqr2_grad,
+                      X = X_train,
+                      y = y_train,
+                      tau = tau, psi = psi,
+                      S = S, lambda = lambda,
+                      method = "BFGS")
+
+    beta_hat <- fit_fold$par
+
+    # VALIDATION PINBALL LOSS (NO PENALTY)
+    resid_val <- as.numeric(y_val - X_val %*% beta_hat)
+    pinball <- (tau - (resid_val < 0)) * resid_val
+
+    #fold_mean[fold] <- mean(pinball)
+    fold_sum[fold] <- sum(pinball) ## THIS WILL CALCULATE SUM CV LOSS, NOT MEAN CV LOSS
+  }
+
+  #cv_results$mean_val_loss[i] <- mean(fold_mean)
+  cv_results$sum_val_loss[i] <- sum(fold_sum)
+}
+
+### --- CHOOSE BEST LAMBDA from sum cv loss---
+
+best_lambda_sum <- cv_results[which.min(cv_results$sum_val_loss), ]
+best_lambda <- best_lambda_sum$lambda
+
+#print(paste("Best λ (mean CV loss):", best_lambda_mean))
+print(paste("Best λ (sum CV loss):",  best_lambda))
+#paste("CV loss at optimal lambda is", round(best_lambda_sum, 6)) 
+#optimal lambda when sum is minimal
+
+  
+# Refit final model on FULL DATA with best lambda
+# Warm start: OLS on full data
+ols_full <- lm(dat_sin_gamma$y ~ X - 1)
+start_full <- coef(ols_full)
+if (length(start_full) != ncol(X)) start_full <- rep(0, ncol(X))
+
+### --- PLOT CV CURVE ---
+plot(log10(cv_results$lambda), cv_results$sum_val_loss,
+     type = "b", pch = 19, col = "darkblue",
+     xlab = "log10(lambda)",
+     ylab = "SUM CV Loss",
+     main = paste("CV for tau =", tau))
+
+abline(v = log10(best_lambda),  col="purple", lty=2)
+
+
+### --- FIT FINAL MODEL USING BEST LAMBDA ---
+fit_best <- optim(par = start_full,
+                   fn = pen_ssqr2,
+                   gr = pen_ssqr2_grad,
+                   X = X, y = dat_sin_gamma$y,
+                   tau = tau, psi = psi,
+                   S = S, lambda = best_lambda,
+                   method = "BFGS")
+
+plot(dat_sin_gamma$x, dat_sin_gamma$y, col = "grey", main = paste("Gamma Quantile GAM Sin (tau =", tau,")"))
+
+lines(dat_sin_gamma$x, X %*% fit_best$par, col = "red", lwd = 3)
+lines(x, true_q90_sin, col = "blue", lty = 2, lwd = 3) #true function
+
+legend("topright",
+       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+
+                   "True (90th quantile)" ),
+       col = c("red", "blue"),
+       lty = c(1, 1, 2), lwd = 3
+       )
+
+```
+
+```{r}
+### --- PARAMETERS ---
+k_folds <- 5
+tau <- 0.9
+psi <- 0.01 #small smoothness for sensitive gamma dist
+#sigma <- 1 #dont need this for gamma
+lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
+set.seed(42)
+
+
+n <- nrow(dat_cos_gamma)
+fold_ids <- sample(rep(1:k_folds, length.out = n))
+
+# store mean validation loss
+cv_results <- data.frame(lambda = lambda_grid,
+                         sum_vall_loss = NA_real_)
+
+# Precompute starting coefficients from full-data OLS (warm start)
+#start_coef <- coef(fit) #from lm(y ~ X - 1)
+
+### --- K-FOLD LOOP over lambda values in grid ---
+for (i in seq_along(lambda_grid)) {
+  
+  lambda <- lambda_grid[i]
+  #fold_mean <- numeric(k_folds)
+  fold_sum <- numeric(k_folds)
+
+  for (fold in 1:k_folds) {
+
+    # split
+    train_idx <- which(fold_ids != fold)
+    val_idx   <- which(fold_ids == fold)
+
+    X_train <- X[train_idx, , drop = FALSE]
+    y_train <- dat_cos_gamma$y[train_idx]
+
+    X_val   <- X[val_idx, , drop = FALSE]
+    y_val   <- dat_cos_gamma$y[val_idx]
+    
+    #OLS on training fold
+    ols_train <- lm(y_train ~ X_train -1)
+    start_beta <- coef(ols_train)
+    if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
+    
+  
+
+    # FIT on training (always same warm start for stability)
+    fit_fold <- optim(par = start_beta,
+                      fn = pen_ssqr2,
+                      gr = pen_ssqr2_grad,
+                      X = X_train,
+                      y = y_train,
+                      tau = tau, psi = psi,
+                      S = S, lambda = lambda,
+                      method = "BFGS")
+
+    beta_hat <- fit_fold$par
+
+    # VALIDATION PINBALL LOSS (NO PENALTY)
+    resid_val <- as.numeric(y_val - X_val %*% beta_hat)
+    pinball <- (tau - (resid_val < 0)) * resid_val
+
+    #fold_mean[fold] <- mean(pinball)
+    fold_sum[fold] <- sum(pinball) ## THIS WILL CALCULATE SUM CV LOSS, NOT MEAN CV LOSS
+  }
+
+  #cv_results$mean_val_loss[i] <- mean(fold_mean)
+  cv_results$sum_val_loss[i] <- sum(fold_sum)
+}
+
+### --- CHOOSE BEST LAMBDA from sum cv loss---
+
+best_lambda_sum <- cv_results[which.min(cv_results$sum_val_loss), ]
+best_lambda <- best_lambda_sum$lambda
+
+#print(paste("Best λ (mean CV loss):", best_lambda_mean))
+print(paste("Best λ (sum CV loss):",  best_lambda))
+#paste("CV loss at optimal lambda is", round(best_lambda_sum, 6)) 
+#optimal lambda when sum is minimal
+
+  
+# Refit final model on FULL DATA with best lambda
+# Warm start: OLS on full data
+ols_full <- lm(dat_cos_gamma$y ~ X - 1)
+start_full <- coef(ols_full)
+if (length(start_full) != ncol(X)) start_full <- rep(0, ncol(X))
+
+### --- PLOT CV CURVE ---
+plot(log10(cv_results$lambda), cv_results$sum_val_loss,
+     type = "b", pch = 19, col = "darkblue",
+     xlab = "log10(lambda)",
+     ylab = "SUM CV Loss",
+     main = paste("CV for tau =", tau))
+
+abline(v = log10(best_lambda),  col="purple", lty=2)
+
+
+### --- FIT FINAL MODEL USING BEST LAMBDA ---
+fit_best <- optim(par = start_full,
+                   fn = pen_ssqr2,
+                   gr = pen_ssqr2_grad,
+                   X = X, y = dat_cos_gamma$y,
+                   tau = tau, psi = psi,
+                   S = S, lambda = best_lambda,
+                   method = "BFGS")
+
+plot(dat_cos_gamma$x, dat_cos_gamma$y, col = "grey", main = paste("Gamma Quantile GAM Cos (tau =", tau,")"))
+
+lines(dat_cos_gamma$x, X %*% fit_best$par, col = "red", lwd = 3)
+lines(x, true_q90_cos, col = "blue", lty = 2, lwd = 3) #true function
+
+legend("topright",
+       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+
+                   "True (90th quantile)" ),
+       col = c("red", "blue"),
+       lty = c(1, 1, 2), lwd = 3
+       )
+```

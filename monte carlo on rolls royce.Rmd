@@ -50,7 +50,7 @@ chartSeries(RR.L, name = "Rolls-Royce Holdings (RR.L)", theme = chartTheme("whit
 #This is for Quantile GAMs
 library(mgcv)
 sm <- smoothCon(
-  s(t, k = 15, bs = "cr"),
+  s(t, k = 15, bs = "cr"), #k=15 is equal to 15 basis functions
   data = dat
 )[[1]]
 
@@ -66,7 +66,7 @@ actual_q90
 ```
 
 ```{r}
-
+#psi is ti smooth the pinball loss
 dlf <- function(x, tau, mu, psi, log = FALSE, deriv = 0)
 {
   sig <- 1
@@ -136,13 +136,15 @@ pen_ssqr2_grad <- function(beta, X, y, S,
 ### --- PARAMETERS ---
 k_folds <- 5
 tau <- 0.9
-psi <- 0.05
+psi <- 0.01
 sigma <- 1
 lambda_grid <- 10^seq(-3, 4, length.out = 25)  # 10^-3 to 10^4
 set.seed(42)
 
 n <- nrow(dat)
-fold_ids <- sample(rep(1:k_folds, length.out = n))
+
+fold_ids <- rep(1:k_folds, each = ceiling(n / k_folds))[1:n]
+
 
 # store mean validation loss
 cv_results <- data.frame(lambda = lambda_grid,
@@ -157,7 +159,7 @@ for (i in seq_along(lambda_grid)) {
   lambda <- lambda_grid[i]
   fold_sum <- numeric(k_folds)
 
-  for (fold in 1:k_folds) {
+  for (fold in 2:k_folds) {
 
     # split
     train_idx <- which(fold_ids != fold)
@@ -169,9 +171,23 @@ for (i in seq_along(lambda_grid)) {
     X_val   <- X[val_idx, , drop = FALSE]
     y_val   <- dat$y[val_idx]
     
+    
     #OLS on training fold
-    ols_train <- lm(y_train ~ X_train -1)
+    #ols_train <- lm(y_train ~ X_train -1)
+    #start_beta <- coef(ols_train)
+    
+    if (length(y_train) < ncol(X)) {
+  start_beta <- rep(0, ncol(X))
+} else {
+  ols_train <- try(lm(y_train ~ X_train -1), silent = TRUE)
+  if (inherits(ols_train, "try-error") ||
+      any(!is.finite(coef(ols_train)))) {
+    start_beta <- rep(0, ncol(X))
+  } else {
     start_beta <- coef(ols_train)
+  }
+}
+
     if (length(start_beta) != ncol(X)) start_beta <- rep(0, ncol(X))
     
   
@@ -220,9 +236,7 @@ plot(log10(cv_results$lambda), cv_results$sum_val_loss,
      main = "CV loss for RR.L (tau = 0.9)")
 
 abline(v = log10(best_lambda), col = "red", lwd = 2, lty = 2)
-```
 
-```{r}
 
 start_full <- coef(lm(dat$y ~ X - 1))
 
@@ -239,9 +253,8 @@ fit_best <- optim(
 )
 
 q90_pred <- as.numeric(X %*% fit_best$par)
-```
 
-```{r}
+
 plot(dat$t, dat$y, col = "grey",
      main = "RR.L Quantile GAM (tau = 0.9)",
      ylab = "Log returns", xlab = "Time")
@@ -258,6 +271,10 @@ legend("topright",
 
 ```
 
+## The plot looks like 99% quantile because stock returns are normally skewed, fat-tailed, and volatile. Smoothing pulls the fit toward the extreme tail.
+
+
+##Just Until The ABove Part (dont include this part onwards)
 ```{r}
 # Calculate daily log returns
 returns <- dailyReturn(Ad(RR.L), type = "log")

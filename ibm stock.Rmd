@@ -1,0 +1,99 @@
+---
+title: "ibm stock qgam"
+output: html_document
+date: "2025-11-26"
+---
+
+```{r}
+# testing our code in real world application (IBM Stock Price)
+library(quantmod)
+getSymbols("IBM", from = "2020-01-01", to = "2024-01-01")
+# use closing prices
+y <- as.numeric(IBM$IBM.Close)
+n <- length(y)
+
+# predictor variable = time index
+x <- 1:n
+
+ibm_data <- data.frame(x=x, y=y)
+plot(x,y, 
+      ylab ="Close Price")
+
+
+```
+
+```{r}
+library(mgcv)
+
+knots <- quantile(x,probs=seq(0.1,0.9,length.out =10))
+sm_1 <- smoothCon(s(IBM, k=10, bs="cr"), data =IBM,knots = knots)[[1]]
+ibm_x <- sm_1$ibm_x
+#S <- sm_1$S[[1]] #penalty matrix S
+#fit <- lm(y~ibm_x-1,data= ibm_data)
+#Build Penalty matrix
+
+#difference matrix for second derivative
+basis_spline <- bs(x, knots = knots, degree = 3, intercept = TRUE)
+p <- ncol(basis_spline)
+D <- diff(diag(p), differences =2)
+S <- t(D) %*% D
+
+#Quantile loss func
+quant_loss <- function(u, tau) {
+  u * (tau - (u < 0))
+}
+
+pen_negllk <- function(beta, y, X, tau, S, lambda) {
+  r <- y - X %*% beta
+  sum(quant_loss(r, tau)) + lambda * t(beta) %*% S %*% beta
+}
+
+pen_negGrad <- function(beta, y, X, tau, S, lambda) {
+  r <- y - X %*% beta
+  grad_loss <- -(tau - (r < 0))  # derivative wrt residual
+  t(X) %*% grad_loss + 2 * lambda * S %*% beta
+}
+
+```
+
+```{r}
+initial_lambda <- 100
+
+taus <- c(0.1, 0.5, 0.9)
+fits <- list()
+
+start_beta <- rep(0, p)
+
+for (t in taus) {
+  fits[[as.character(t)]] <- optim(
+    par = start_beta,
+    fn = pen_negllk,
+    gr = pen_negGrad,
+    y = y, X = X, tau = t,
+    S = S, lambda = lambda,
+    method = "BFGS", control = list(maxit = 2000)
+  )
+}
+
+plot(x, y, type = "l", col = "grey40", lwd = 1.5,
+     main = "IBM Stock Price Quantile GAM",
+     ylab = "Close Price")
+
+cols <- c("red", "blue", "purple")
+i <- 1
+
+for (t in taus) {
+  beta_hat <- fits[[as.character(t)]]$par
+  y_hat <- X %*% beta_hat
+  lines(x, y_hat, col = cols[i], lwd = 2)
+  i <- i + 1
+}
+
+legend("topright",
+       legend = c("Price", "10% Quantile", "50% Quantile", "90% Quantile"),
+       col = c("grey40", "red", "blue", "purple"),
+       lty = 1, lwd = c(1.5, 2, 2, 2))
+
+
+
+```
