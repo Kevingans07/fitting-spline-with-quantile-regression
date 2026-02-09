@@ -96,7 +96,7 @@ pen_negGrad <- function(par, tau, psi, dat, X, S, lambda) {
 
 # second version of penalty
 pen_ssqr2 <- function(beta, X, y, S, 
-                     lambda,tau, psi =0.1, sigma =1){
+                     lambda,tau, psi=0.1, sigma =1){
   mu <- X %*% beta
   res <- (y-mu)
   pen <- as.numeric(t(beta) %*% S %*% beta) #produces a 1x1 matrix
@@ -499,17 +499,16 @@ legend("topright",
 ##This is for Gamma Distribution
 
 ```{r}
-mu_sin <- exp( sin(x) )
-mu_cos <- exp( cos(x) )
 
 shape <- 5   # controls variance
+mu_sin <- exp( sin(x) )
 scale_sin <- mu_sin / shape
-scale_cos <- mu_cos / shape
-
 y_sin_gamma <- rgamma(n, shape = shape, scale = scale_sin)
-y_cos_gamma <- rgamma(n, shape = shape, scale = scale_cos)
-
 true_q90_sin <- qgamma(0.9, shape = shape, scale = scale_sin)
+
+mu_cos <- exp( cos(x) )
+scale_cos <- mu_cos / shape
+y_cos_gamma <- rgamma(n, shape = shape, scale = scale_cos)
 true_q90_cos <- qgamma(0.9, shape = shape, scale = scale_cos)
 
 dat_sin_gamma <- data.frame(x = x, y = y_sin_gamma)
@@ -651,6 +650,49 @@ legend("topright",
        col = c("red", "blue"),
        lty = c(1, 1, 2), lwd = 3
        )
+
+```
+```{r}
+#Checking for different quantiles.
+
+taus <- c(0.1, 0.5, 0.9)
+psi <- 0.05
+lambda <- 50
+
+fits <- list()
+p <- ncol(X)
+
+for (tau in taus) {
+  fit_tau <- optim(
+    par = rep(0,p),     # warm start from mean GAM
+    fn  = pen_ssqr2,
+    gr  = pen_ssqr2_grad,
+    tau = tau,
+    psi = psi,
+    y   = dat_sin_gamma$y,
+    X   = X,
+    S   = S,
+    lambda = lambda,
+    method = "BFGS"
+  )
+  
+  fits[[as.character(tau)]] <- fit_tau$par
+}
+
+
+plot(x, y_sin_gamma, col = "grey", pch = 16, cex = 0.4,
+     main = "Quantile GAM on Gamma sin data")
+
+lines(x, X %*% fits[["0.1"]], col = "blue",  lwd = 2)
+lines(x, X %*% fits[["0.5"]], col = "black", lwd = 2)
+lines(x, X %*% fits[["0.9"]], col = "red",   lwd = 2)
+
+legend("topright",
+       legend = c("10%", "50% (median)", "90%"),
+       col = c("blue", "black", "red"),
+       lwd = 2)
+
+
 
 ```
 
