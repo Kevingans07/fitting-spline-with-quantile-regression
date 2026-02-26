@@ -142,7 +142,7 @@ fit_pen_2 <- optim(par = coef(fit),
                  method = "BFGS",
                  )
 
-plot(x, y, col = "grey", main = paste("Quantile Regression tau =", tau))
+plot(x, y, col = "grey", main = paste("Quantile GAM tau =", tau))
 
 lines(x, X %*% fit_pen_1$par, col = "red", lwd = 2)
 lines(x, X %*% fit_pen_2$par, col = "yellow", lwd = 2) #this overlaps with other line as it has same value
@@ -292,40 +292,40 @@ legend("topright",
 ```
 ```{r}
 
-### --- FIT FINAL MODEL USING BEST LAMBDA ---
-fit_best <- optim(par = start_full,
-                   fn = pen_ssqr2,
-                   gr = pen_ssqr2_grad,
-                   X = X, y = dat$y,
-                   tau = 0.9, psi = psi,
-                   S = S, lambda = best_lambda,
-                   method = "BFGS")
-
-plot(dat$x, dat$y, col = "grey", main = paste("Quantile GAM (tau =", tau,")"))
-
-
-### ALSO FIT λ=100 FOR COMPARISON
-fit_100 <- optim(par = start_full,
-                 fn = pen_ssqr2,
-                 gr = pen_ssqr2_grad,
-                 X = X, y = dat$y,
-                 tau = tau, psi = psi,
-                 S = S, lambda = 100,
-                 method = "BFGS")
-
-### --- PLOT RESULTS ---
-
-lines(dat$x, X %*% fit_best$par, col = "red", lwd = 3)
-lines(dat$x, X %*% fit_100$par, col = "purple", lwd = 3)
-lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 3) #true function
-
-legend("topright", 
-       legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
-                   "λ = 100",
-                   "True (90th quantile)" ), 
-       col = c("red", "purple", "blue"),
-       lty = c(1, 1, 2), lwd = 3
-       )
+# ### --- FIT FINAL MODEL USING BEST LAMBDA ---
+# fit_best <- optim(par = start_full,
+#                    fn = pen_ssqr2,
+#                    gr = pen_ssqr2_grad,
+#                    X = X, y = dat$y,
+#                    tau = 0.9, psi = psi,
+#                    S = S, lambda = best_lambda,
+#                    method = "BFGS")
+# 
+# plot(dat$x, dat$y, col = "grey", main = paste("Quantile GAM (tau =", tau,")"))
+# 
+# 
+# ### ALSO FIT λ=100 FOR COMPARISON
+# fit_100 <- optim(par = start_full,
+#                  fn = pen_ssqr2,
+#                  gr = pen_ssqr2_grad,
+#                  X = X, y = dat$y,
+#                  tau = tau, psi = psi,
+#                  S = S, lambda = 100,
+#                  method = "BFGS")
+# 
+# ### --- PLOT RESULTS ---
+# 
+# lines(dat$x, X %*% fit_best$par, col = "red", lwd = 3)
+# lines(dat$x, X %*% fit_100$par, col = "purple", lwd = 3)
+# lines(x, sin_quantile_90, col = "blue", lty = 2, lwd = 3) #true function
+# 
+# legend("topright", 
+#        legend = c( paste("Optimal λ =", signif(best_lambda, 3)),
+#                    "λ = 100",
+#                    "True (90th quantile)" ), 
+#        col = c("red", "purple", "blue"),
+#        lty = c(1, 1, 2), lwd = 3
+#        )
 
 ```
 
@@ -365,7 +365,7 @@ fit_pen_2 <- optim(par = coef(fit),
                  method = "BFGS",
                  )
 
-plot(x, y_cos, col = "grey", main = paste("Quantile Regression tau =", tau))
+plot(x, y_cos, col = "grey", main = paste("Quantile GAM tau =", tau))
 
 
 lines(x, X %*% fit_pen_2$par, col = "yellow", lwd = 2) 
@@ -679,7 +679,6 @@ for (tau in taus) {
   fits[[as.character(tau)]] <- fit_tau$par
 }
 
-
 plot(x, y_sin_gamma, col = "grey", pch = 16, cex = 0.4,
      main = "Quantile GAM on Gamma sin data")
 
@@ -692,6 +691,142 @@ legend("topright",
        col = c("blue", "black", "red"),
        lwd = 2)
 
+```
+
+```{r}
+
+##Now we try 100 simulations
+n_sims <- 100
+p <- ncol(X)
+all_fits <- array(NA, dim =c(n_sims, p, length(taus)))
+dimnames(all_fits)[[3]] <- as.character(taus)
+
+set.seed(123)  # for reproducibility of the 100 sims
+for (sim in 1:n_sims) {
+  # Simulate new data
+  y_sim <- rgamma(n, shape = shape, scale = scale_sin)
+  
+  # Fit for each tau
+  for (i in seq_along(taus)) {
+    tau <- taus[i]
+    fit_tau <- optim(
+      par = rep(0, p),
+      fn = pen_ssqr2,
+      gr = pen_ssqr2_grad,
+      tau = tau,
+      psi = psi,
+      y = y_sim,
+      X = X,
+      S = S,
+      lambda = lambda,
+      method = "BFGS"
+    )
+    all_fits[sim, , i] <- fit_tau$par
+  }
+  
+  if (sim %% 10 == 0) cat("Simulation", sim, "complete\n")
+}
+
+### --- COMPARISON PLOTS ---
+par(mfrow = c(2, 2))
+
+# Plot 1: Original single seed version
+plot(x, y_sin_gamma, col = "grey", pch = 16, cex = 0.4,
+     main = "Original (Single Seed)")
+lines(x, X %*% fits[["0.1"]], col = "blue", lwd = 2)
+lines(x, X %*% fits[["0.5"]], col = "black", lwd = 2)
+lines(x, X %*% fits[["0.9"]], col = "red", lwd = 2)
+legend("topright", legend = c("10%", "50%", "90%"),
+       col = c("blue", "black", "red"), lwd = 2)
+
+
+# Plot 2: All 100 simulations overlaid
+plot(x, y_sin_gamma, col = "grey", pch = 16, cex = 0.4,
+     main = "All 100 Simulations", ylim = range(y_sin_gamma))
+for (sim in 1:n_sims) {
+  lines(x, X %*% all_fits[sim, , "0.1"], col = rgb(0, 0, 1, 0.1))
+  lines(x, X %*% all_fits[sim, , "0.5"], col = rgb(0, 0, 0, 0.1))
+  lines(x, X %*% all_fits[sim, , "0.9"], col = rgb(1, 0, 0, 0.1))
+}
+# Add original on top
+lines(x, X %*% fits[["0.1"]], col = "blue", lwd = 3)
+lines(x, X %*% fits[["0.5"]], col = "black", lwd = 3)
+lines(x, X %*% fits[["0.9"]], col = "red", lwd = 3)
+
+# Plot 3: Mean ± SD bands across simulations
+true_q10 <- qgamma(0.1, shape = shape, scale = scale_sin)
+true_q50 <- qgamma(0.5, shape = shape, scale = scale_sin)
+true_q90 <- qgamma(0.9, shape = shape, scale = scale_sin)
+
+plot(x, true_q50, type = "n", ylim = range(y_sin_gamma),
+     main = "Mean ± SD Across 100 Simulations",
+     xlab = "x", ylab = "y")
+
+for (i in seq_along(taus)) {
+  tau <- taus[i]
+  # Calculate mean and SD across simulations
+  mean_fit <- apply(all_fits[, , as.character(tau)], 2, mean)
+  sd_fit <- apply(all_fits[, , as.character(tau)], 2, sd)
+  
+  fitted_vals <- X %*% mean_fit
+  upper <- X %*% (mean_fit + sd_fit)
+  lower <- X %*% (mean_fit - sd_fit)
+  
+  col_val <- c("blue", "black", "red")[i]
+  
+  # Add shaded region
+  polygon(c(x, rev(x)), c(upper, rev(lower)),
+          col = adjustcolor(col_val, alpha.f = 0.2), border = NA)
+  lines(x, fitted_vals, col = col_val, lwd = 2)
+}
+
+# Add true quantiles
+lines(x, true_q10, col = "blue", lty = 2, lwd = 2)
+lines(x, true_q50, col = "black", lty = 2, lwd = 2)
+lines(x, true_q90, col = "red", lty = 2, lwd = 2)
+
+legend("topright",
+       legend = c("10% (mean)", "50% (mean)", "90% (mean)", "True quantiles"),
+       col = c("blue", "black", "red", "black"),
+       lty = c(1, 1, 1, 2), lwd = 2)
+
+# Plot 4: Comparison of original vs mean of simulations
+plot(x, y_sin_gamma, col = "grey", pch = 16, cex = 0.4,
+     main = "Original vs Mean of 100 Sims")
+
+for (i in seq_along(taus)) {
+  tau <- taus[i]
+  mean_fit <- apply(all_fits[, , as.character(tau)], 2, mean)
+  col_val <- c("blue", "black", "red")[i]
+  
+  # Mean of simulations (solid)
+  lines(x, X %*% mean_fit, col = col_val, lwd = 2)
+  # Original (dashed)
+  lines(x, X %*% fits_original[[as.character(tau)]], 
+        col = col_val, lwd = 2, lty = 2)
+}
+
+legend("topright",
+       legend = c("Mean of 100", "Original seed=42"),
+       lty = c(1, 2), lwd = 2)
+
+par(mfrow = c(1, 1))
+
+### --- QUANTIFY VARIABILITY ---
+# Calculate variability metrics
+for (tau in taus) {
+  cat("\nQuantile tau =", tau, "\n")
+  
+  # Pointwise SD
+  sd_fit <- apply(all_fits[, , as.character(tau)], 2, sd)
+  fitted_sd <- X %*% sd_fit
+  cat("Mean pointwise SD:", mean(fitted_sd), "\n")
+  
+  # Distance from original
+  mean_fit <- apply(all_fits[, , as.character(tau)], 2, mean)
+  dist_from_original <- sqrt(mean((X %*% mean_fit - X %*% fits_original[[as.character(tau)]])^2))
+  cat("RMSE from original:", dist_from_original, "\n")
+}
 
 
 ```
